@@ -1,0 +1,11 @@
+node_modules/
+.next/
+.git/
+.env
+.env.*
+!.env.example
+*.log
+*.tsbuildinfo
+server/db.json
+*.zip
+project-structure.txt
