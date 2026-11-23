@@ -2,14 +2,10 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
-
-const API_URL = "http://localhost:3007";
+import { supabase } from "@/lib/supabase";
 
 export default function RegisterPage() {
-  const router = useRouter();
-
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -17,18 +13,22 @@ export default function RegisterPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
-  async function handleRegister(e: FormEvent<HTMLFormElement>) {
+  async function handleRegister(
+    e: FormEvent<HTMLFormElement>
+  ) {
     e.preventDefault();
     setError("");
+    setSuccess("");
 
     if (name.trim().length < 3) {
       setError("Full name must be at least 3 characters.");
       return;
     }
 
-    if (password.length < 6) {
-      setError("Password must be at least 6 characters.");
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters.");
       return;
     }
 
@@ -40,45 +40,49 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      const response = await fetch(`${API_URL}/register`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          name: name.trim(),
-          email: email.trim(),
+      const { data, error: signUpError } =
+        await supabase.auth.signUp({
+          email: email.trim().toLowerCase(),
           password,
-        }),
-      });
+          options: {
+            data: {
+              full_name: name.trim(),
+            },
+          },
+        });
 
-      const data = await response.json();
+      if (signUpError) {
+        throw signUpError;
+      }
 
-      if (!response.ok) {
-        throw new Error(
-          data.message ||
-          data.error ||
-          `Registration failed (${response.status})`
+      if (!data.user) {
+        throw new Error("Registration failed. Please try again.");
+      }
+
+      if (data.session) {
+        await supabase.auth.signOut();
+
+        setSuccess(
+          "Account created successfully! You can now log in. " +
+          "Email verification may be required depending on your settings."
+        );
+      } else {
+        setSuccess(
+          "Registration request completed. " +
+          "If email confirmation is required, check your inbox " +
+          "and spam folder for a verification link."
         );
       }
 
-      if (!data.accessToken) {
-        throw new Error("No access token returned.");
-      }
-
-      sessionStorage.setItem("token", data.accessToken);
-
-      sessionStorage.setItem(
-        "user",
-        JSON.stringify(data.user || {})
-      );
-
-      router.replace("/dashboard");
+      setName("");
+      setEmail("");
+      setPassword("");
+      setConfirmPassword("");
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "Something went wrong."
+          : "Something went wrong. Please try again."
       );
     } finally {
       setLoading(false);
@@ -98,7 +102,7 @@ export default function RegisterPage() {
             </div>
 
             <span className="text-lg font-bold">
-              Json Server Auth
+              User Management System
             </span>
           </div>
 
@@ -115,7 +119,7 @@ export default function RegisterPage() {
             </div>
 
             <h2 className="mb-3 text-3xl font-bold">
-              Json Server Auth
+              User Management
             </h2>
 
             <p className="mx-auto max-w-xs text-sm leading-7 text-violet-200">
@@ -226,10 +230,11 @@ export default function RegisterPage() {
                   id="password"
                   type={showPassword ? "text" : "password"}
                   required
+                  minLength={8}
                   autoComplete="new-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Create a password"
+                  placeholder="At least 8 characters"
                   className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 pr-16 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
                 />
 
@@ -256,6 +261,7 @@ export default function RegisterPage() {
                 id="confirmPassword"
                 type={showPassword ? "text" : "password"}
                 required
+                minLength={8}
                 autoComplete="new-password"
                 value={confirmPassword}
                 onChange={(e) =>
@@ -273,6 +279,26 @@ export default function RegisterPage() {
                 className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700"
               >
                 {error}
+              </div>
+            )}
+
+            {/* SUCCESS MESSAGE */}
+            {success && (
+              <div
+                role="status"
+                className="rounded-lg border border-green-200 bg-green-50 p-4 text-sm leading-6 text-green-800"
+              >
+                <p className="font-semibold">
+                  Registration submitted!
+                </p>
+                <p className="mt-1">{success}</p>
+
+                <Link
+                  href="/login"
+                  className="mt-3 inline-block font-bold text-violet-700 hover:underline"
+                >
+                  Go to Login →
+                </Link>
               </div>
             )}
 

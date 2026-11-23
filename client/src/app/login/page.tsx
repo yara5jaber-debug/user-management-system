@@ -4,8 +4,7 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-
-const API_URL = "http://localhost:3007";
+import { supabase } from "@/lib/supabase";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -23,47 +22,44 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const response = await fetch(`${API_URL}/login`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ email, password }),
-      });
+      const { data, error: loginError } =
+        await supabase.auth.signInWithPassword({
+          email: email.trim().toLowerCase(),
+          password,
+        });
 
-      const data = await response.json();
+      if (loginError) {
+        throw loginError;
+      }
 
-      if (!response.ok) {
+      if (!data.user || !data.session) {
         throw new Error(
-          data.message ||
-          data.error ||
-          `Login failed (${response.status})`
+          "Login failed. Please check your credentials."
         );
       }
 
-      if (!data.accessToken) {
-        throw new Error("Access token was not returned");
-      }
-
-      sessionStorage.setItem("token", data.accessToken);
-      sessionStorage.setItem(
-        "user",
-        JSON.stringify(data.user || {})
-      );
-
       // Remember email only, never the password
       if (rememberMe) {
-        localStorage.setItem("rememberedEmail", email);
+        localStorage.setItem(
+          "rememberedEmail",
+          email.trim().toLowerCase()
+        );
       } else {
         localStorage.removeItem("rememberedEmail");
       }
 
+      // Remove old authentication data
+      sessionStorage.removeItem("token");
+      sessionStorage.removeItem("user");
+
+      // Supabase manages its own authentication session
       router.replace("/dashboard");
+      router.refresh();
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "Unable to connect to the server"
+          : "Unable to sign in. Please try again."
       );
     } finally {
       setLoading(false);
@@ -82,7 +78,7 @@ export default function LoginPage() {
                 ◈
               </div>
               <span className="text-lg font-bold">
-                Json Server Auth
+                User Management System
               </span>
             </div>
           </div>
@@ -99,12 +95,12 @@ export default function LoginPage() {
             </div>
 
             <h2 className="mb-3 text-3xl font-bold">
-              Json Server Auth
+              User Management
             </h2>
 
             <p className="mx-auto max-w-xs text-sm leading-7 text-violet-200">
-              Single authentication and user management
-              using JSON Server.
+              Secure authentication and user management
+              powered by Supabase.
             </p>
           </div>
 

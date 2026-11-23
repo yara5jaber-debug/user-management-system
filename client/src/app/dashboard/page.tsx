@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { supabase } from "@/lib/supabase";
 
 const API_URL = "http://localhost:3007";
 
@@ -24,58 +25,83 @@ export default function DashboardPage() {
   const [error, setError] = useState("");
   const [currentUser, setCurrentUser] = useState<User | null>(null);
 
-  useEffect(() => {
-    const token = sessionStorage.getItem("token");
-    const storedUser = sessionStorage.getItem("user");
+  
+useEffect(() => {
+  let cancelled = false;
 
-    if (!token) {
-      router.replace("/login");
-      return;
-    }
+  async function loadDashboard() {
+    try {
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
 
+      if (cancelled) return;
 
-    async function loadDashboard() {
-      try {
-        const response = await fetch(`${API_URL}/users`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-          cache: "no-store",
-        });
+      if (authError || !user) {
+        router.replace("/login");
+        return;
+      }
 
-        if (!response.ok) {
-          throw new Error(
-            `Failed to load dashboard (${response.status})`
-          );
-        }
+      setCurrentUser({
+        id: user.id,
+        name:
+          typeof user.user_metadata?.full_name === "string"
+            ? user.user_metadata.full_name
+            : "User",
+        email: user.email || "",
+        role: "User",
+        status: "Active",
+      });
 
-        const data = await response.json();
-        if (storedUser) {
-        try {
-            setCurrentUser(JSON.parse(storedUser));
-        } catch {
-            setCurrentUser(null);
-        }
-        }
+      // User statistics will be connected to
+      // the Supabase profiles table later.
+      
+const { data: profiles, error: profilesError } =
+  await supabase
+    .from("profiles")
+    .select("id, name, email, role, status, created_at")
+    .order("created_at", { ascending: false });
 
-        if (!Array.isArray(data)) {
-          throw new Error("Invalid server response");
-        }
+if (profilesError) {
+  throw profilesError;
+}
 
-        setUsers(data);
-      } catch (err) {
+if (cancelled) return;
+
+    setUsers(
+    (profiles ?? []).map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        email: profile.email ?? "",
+        role: profile.role,
+        status: profile.status,
+        createdAt: profile.created_at,
+    }))
+    );
+
+    } catch (err) {
+      if (!cancelled) {
         setError(
           err instanceof Error
             ? err.message
             : "Unable to load dashboard"
         );
-      } finally {
+      }
+    } finally {
+      if (!cancelled) {
         setLoading(false);
       }
     }
+  }
 
-    void loadDashboard();
-  }, [router]);
+  void loadDashboard();
+
+  return () => {
+    cancelled = true;
+  };
+}, [router]);
+
 
   const totalUsers = users.length;
 
@@ -93,11 +119,20 @@ export default function DashboardPage() {
 
   const recentUsers = [...users].reverse().slice(0, 5);
 
-  function logout() {
-    sessionStorage.removeItem("token");
-    sessionStorage.removeItem("user");
-    router.replace("/login");
+  async function logout() {
+  const { error } = await supabase.auth.signOut();
+
+  if (error) {
+    setError(error.message);
+    return;
   }
+
+  sessionStorage.removeItem("token");
+  sessionStorage.removeItem("user");
+
+  router.replace("/login");
+  router.refresh();
+}
 
   const stats = [
     {
@@ -135,7 +170,7 @@ export default function DashboardPage() {
       {/* Sidebar */}
       <aside className="w-full border-b border-gray-200 bg-white p-6 md:min-h-screen md:w-60 md:border-b-0 md:border-r">
         <h2 className="mb-10 text-xl font-bold text-violet-700">
-          ◈ Json Server Auth
+          ◈ User Management System
         </h2>
 
         <nav className="space-y-2">

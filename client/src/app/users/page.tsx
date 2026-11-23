@@ -9,8 +9,8 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { supabase } from "@/lib/supabase";
 
-const API_URL = "http://localhost:3007";
 
 type User = {
   id: number | string;
@@ -24,7 +24,6 @@ type User = {
 type UserForm = {
   name: string;
   email: string;
-  password: string;
   role: string;
   status: string;
 };
@@ -32,7 +31,6 @@ type UserForm = {
 const emptyForm: UserForm = {
   name: "",
   email: "",
-  password: "",
   role: "User",
   status: "Active",
 };
@@ -56,9 +54,6 @@ export default function UsersPage() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [deletingId, setDeletingId] = useState<
-    User["id"] | null
-  >(null);
 
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -80,102 +75,55 @@ export default function UsersPage() {
 
   const pageSize = 5;
 
-  function getToken() {
-    return sessionStorage.getItem("token");
+  async function loadUsers() {
+    const { data, error: fetchError } = await supabase
+      .from("profiles")
+      .select("id, name, email, role, status, created_at")
+      .order("created_at", { ascending: false });
+
+    if (fetchError) throw fetchError;
+
+    setUsers((data ?? []).map((profile) => ({
+      id: profile.id,
+      name: profile.name,
+      email: profile.email ?? "",
+      role: profile.role,
+      status: profile.status,
+      createdAt: profile.created_at,
+    })));
   }
 
-  async function loadUsers(token: string) {
-
-    try {
-      const response = await fetch(`${API_URL}/users`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        cache: "no-store",
-      });
-
-      if (!response.ok) {
-        if (
-          response.status === 401 ||
-          response.status === 403
-        ) {
-          throw new Error(
-            "Session expired or access denied. Please log in again."
-          );
+  useEffect(() => {
+    let cancelled = false;
+    async function initialize() {
+      try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+        if (cancelled) return;
+        if (authError || !user) {
+          router.replace("/login");
+          return;
         }
-
-        throw new Error(
-          `Failed to load users (${response.status})`
-        );
-      }
-
-      const data: User[] = await response.json();
-      setError("");
-
-      if (!Array.isArray(data)) {
-        throw new Error("Invalid server response");
-      }
-
-      setUsers(data);
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Failed to load users"
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
-
-
-useEffect(() => {
-  const token = sessionStorage.getItem("token");
-
-  if (!token) {
-    router.replace("/login");
-    return;
-  }
-
-  async function fetchInitialUsers() {
-    try {
-      const response = await fetch(
-        `${API_URL}/users`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-          cache: "no-store",
+        const { data: profile, error: roleError } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", user.id)
+          .single();
+        if (roleError) throw roleError;
+        if (profile?.role !== "admin") {
+          router.replace("/dashboard");
+          return;
         }
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `Failed to load users (${response.status})`
-        );
+        await loadUsers();
+        if (!cancelled) setError("");
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Unable to load users");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-
-      const data: User[] = await response.json();
-
-      if (!Array.isArray(data)) {
-        throw new Error("Invalid server response");
-      }
-
-      setUsers(data);
-      setError("");
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Failed to load users"
-      );
-    } finally {
-      setLoading(false);
     }
-  }
-
-  void fetchInitialUsers();
-}, [router]);
+    void initialize();
+    return () => { cancelled = true; };
+  }, [router]);
 
   const filteredUsers = useMemo(() => {
     const query = search.toLowerCase().trim();
@@ -250,174 +198,68 @@ useEffect(() => {
     },
   ];
 
-  function openCreate() {
-    setForm({ ...emptyForm });
-    setEditingId(null);
-    setError("");
-    setNotice("");
-    setShowForm(true);
-  }
-
   function openEdit(user: User) {
     setForm({
       name: user.name || "",
       email: user.email,
-      password: "",
-      role: user.role || "User",
+      role: user.role || "user",
       status: user.status || "Active",
     });
-
     setEditingId(user.id);
     setError("");
     setNotice("");
     setShowForm(true);
   }
 
-  async function handleSave(
-    event: FormEvent<HTMLFormElement>
-  ) {
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-
     setError("");
     setNotice("");
-
-    const token = getToken();
-
-    if (!token) {
-      router.replace("/login");
-      return;
-    }
-
-    const isEditing = editingId !== null;
-
+    if (editingId === null) return;
     if (!form.name.trim()) {
       setError("Full name is required");
       return;
     }
-
-    if (
-      (!isEditing || form.password) &&
-      form.password.length < 6
-    ) {
-      setError(
-        "Password must contain at least 6 characters"
-      );
-      return;
-    }
-
     setSaving(true);
-
     try {
-      const payload: Record<string, string> = {
-        name: form.name.trim(),
-        email: form.email.trim(),
-        role: form.role,
-        status: form.status,
-      };
-
-      if (!isEditing || form.password) {
-        payload.password = form.password;
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError || !user) throw new Error("Please log in again.");
+      if (editingId === user.id && (form.role !== "admin" || form.status !== "Active")) {
+        throw new Error("You cannot demote or deactivate your own admin account.");
       }
-
-      const url = isEditing
-        ? `${API_URL}/users/${editingId}`
-        : `${API_URL}/register`;
-
-      const response = await fetch(url, {
-        method: isEditing ? "PATCH" : "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await response
-        .json()
-        .catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(
-          data.message ||
-            data.error ||
-            `Request failed (${response.status})`
-        );
-      }
-
+      const { data, error: updateError } = await supabase
+        .from("profiles")
+        .update({
+          name: form.name.trim(),
+          role: form.role,
+          status: form.status,
+        })
+        .eq("id", editingId)
+        .select("id")
+        .single();
+      if (updateError) throw updateError;
+      if (!data) throw new Error("Profile update was not applied.");
+      await loadUsers();
       setShowForm(false);
       setEditingId(null);
-      setForm({ ...emptyForm });
-
-      await loadUsers(token);
-
-      setNotice(
-        isEditing
-          ? "User updated successfully!"
-          : "User created successfully!"
-      );
+      setNotice("User profile updated successfully!");
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Failed to save user"
-      );
+      setError(err instanceof Error ? err.message : "Failed to update user");
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleDelete(id: User["id"]) {
-    const confirmed = window.confirm(
-      "Are you sure you want to delete this user?"
-    );
-
-    if (!confirmed) return;
-
-    const token = getToken();
-
-    if (!token) {
-      router.replace("/login");
+  async function logout() {
+    const { error: signOutError } = await supabase.auth.signOut();
+    if (signOutError) {
+      setError(signOutError.message);
       return;
     }
-
-    setError("");
-    setNotice("");
-    setDeletingId(id);
-
-    try {
-      const response = await fetch(
-        `${API_URL}/users/${id}`,
-        {
-          method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `Delete failed (${response.status})`
-        );
-      }
-
-      await loadUsers(token);
-      setNotice("User deleted successfully!");
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Failed to delete user"
-      );
-    } finally {
-      setDeletingId(null);
-    }
-  }
-
-  function logout() {
     sessionStorage.removeItem("token");
     sessionStorage.removeItem("user");
     router.replace("/login");
+    router.refresh();
   }
 
   return (
@@ -433,7 +275,7 @@ useEffect(() => {
           <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-100">
             ◈
           </span>
-          <span>Json Server Auth</span>
+          <span>User Management System</span>
         </Link>
 
         <nav className="space-y-2">
@@ -475,7 +317,7 @@ useEffect(() => {
               User Management
             </p>
             <p className="mt-1 font-semibold text-violet-700">
-              Json Server Auth
+              User Management System
             </p>
           </div>
         </div>
@@ -492,17 +334,18 @@ useEffect(() => {
             </h1>
 
             <p className="mt-2 text-sm text-gray-500">
-              Manage all users in the system. Create,
-              view, update, and delete users.
+              View and update profiles. Account creation and deletion
+              require secure server endpoints.
             </p>
           </div>
 
           <button
             type="button"
-            onClick={openCreate}
-            className="rounded-lg bg-violet-700 px-5 py-3 font-semibold text-white hover:bg-violet-800"
+            disabled
+            title="Requires a secure administrator server endpoint"
+            className="cursor-not-allowed rounded-lg bg-violet-400 px-5 py-3 font-semibold text-white opacity-60"
           >
-            + Create User
+            + Create User (coming soon)
           </button>
         </div>
 
@@ -678,15 +521,12 @@ useEffect(() => {
                             ✏️
                           </button>
 
-                          {/* DELETE */}
+                          {/* DELETE: disabled until secure server endpoint exists */}
                           <button
                             type="button"
-                            title="Delete User"
-                            disabled={deletingId === user.id}
-                            onClick={() =>
-                              handleDelete(user.id)
-                            }
-                            className="rounded-lg bg-red-50 px-3 py-2 text-red-700 hover:bg-red-100 disabled:opacity-50"
+                            disabled
+                            title="Secure account deletion is not configured yet"
+                            className="cursor-not-allowed rounded-lg bg-red-50 px-3 py-2 text-red-700 opacity-40"
                           >
                             🗑️
                           </button>
@@ -736,7 +576,7 @@ useEffect(() => {
           </div>
         </div>
 
-        {/* CREATE / EDIT MODAL */}
+        {/* EDIT PROFILE MODAL */}
         {showForm && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
             <div
@@ -749,9 +589,7 @@ useEffect(() => {
                 id="user-form-title"
                 className="mb-5 text-2xl font-bold"
               >
-                {editingId !== null
-                  ? "Edit User"
-                  : "Create User"}
+                Edit User Profile
               </h2>
 
               <form
@@ -773,39 +611,10 @@ useEffect(() => {
                   />
                 </label>
 
-                <label className="block text-sm">
-                  Email
-                  <input
-                    type="email"
-                    required
-                    value={form.email}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        email: e.target.value,
-                      })
-                    }
-                    className="mt-1 w-full rounded-lg border p-3"
-                  />
-                </label>
-
-                <label className="block text-sm">
-                  Password{" "}
-                  {editingId !== null &&
-                    "(leave blank to keep current)"}
-                  <input
-                    type="password"
-                    required={editingId === null}
-                    value={form.password}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        password: e.target.value,
-                      })
-                    }
-                    className="mt-1 w-full rounded-lg border p-3"
-                  />
-                </label>
+                <div className="text-sm text-gray-600">
+                  Email: <span className="font-medium">{form.email}</span>
+                  <p className="mt-1 text-xs">Email and password changes require a separate secure authentication flow.</p>
+                </div>
 
                 <label className="block text-sm">
                   Role
@@ -819,10 +628,10 @@ useEffect(() => {
                     }
                     className="mt-1 w-full rounded-lg border p-3"
                   >
-                    <option value="User">
+                    <option value="user">
                       User
                     </option>
-                    <option value="Admin">
+                    <option value="admin">
                       Admin
                     </option>
                   </select>
