@@ -24,8 +24,6 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-
-  
 useEffect(() => {
   let cancelled = false;
 
@@ -56,7 +54,7 @@ useEffect(() => {
 
       // User statistics will be connected to
       // the Supabase profiles table later.
-      
+
 const { data: profiles, error: profilesError } =
   await supabase
     .from("profiles")
